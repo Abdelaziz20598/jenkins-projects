@@ -1,0 +1,142 @@
+#this is my code just to play arround with jenkins and apply some pipelines
+
+sudo service jenkins status
+sudo service jenkins stop
+java -version
+sudo service jenkins start
+#if the port is busy
+sudo netstat -tulp | grep 8080
+#or
+sudo lsof -i :8080
+#you can change jenkins port
+sudo vim /etc/default/jenkins
+
+/var/lib/jenkins/workspace
+
+#no of executers must be 3 >> the same number of running pipelines
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'branch', defaultValue: 'main', description: 'Branch to deploy')
+    }
+
+    environment {
+        welcome = 'Hello Omar'
+    }
+
+    stages {
+        stage('User Confirmation') {
+            steps {
+                script {
+                    env.CONFIRM = input(
+                        message: 'Are you sure you want to deploy?',
+                        parameters: [
+                            choice(name: 'CONFIRM', choices: ['yes', 'no'], description: 'Confirm deployment')
+                        ]
+                    )
+                }
+            }
+        }
+
+        stage('Hello') {
+            when {
+                expression { params.branch == 'main' && env.CONFIRM == 'yes' } // Corrected CONFIRM check
+            }
+            steps {
+                echo "${welcome}" // Correct variable interpolation
+            }
+        }
+    }
+
+    post {
+        success {
+	    echo "Building the test pipeline"
+            build job: "test"
+        }
+        failure {
+            echo "failed"
+        }
+    }
+}
+
+
+
+#test pipeline
+
+pipeline {
+    agent any
+
+    tools {
+        // Install the Maven version configured as "M3" and add it to the path.
+        maven "M3"
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                // Get some code from a GitHub repository
+                git 'https://github.com/jglick/simple-maven-project-with-tests.git'
+
+                // Run Maven on a Unix agent.
+                sh "mvn -Dmaven.test.failure.ignore=true clean package"
+
+                // To run Maven on a Windows agent, use
+                // bat "mvn -Dmaven.test.failure.ignore=true clean package"
+
+		//junit plugin must be installed
+                junit '**/target/surefire-reports/TEST-*.xml'
+                archiveArtifacts 'target/*.jar'
+		//note that the test maybe fail, don't panic just rebuild the pipelines again
+            }
+
+            post {
+                // If Maven was able to run the tests, even if some of the test
+                // failed, record the test results and archive the jar file.
+                success {
+                    // Building the list pipeline
+                    echo "Triggering the list pipeline"
+                    //build job: "list", wait: true Use wait: true to wait for "list" pipeline to complete >> it causes error because the test waits untill the list to complete and the list waits the the test to complete (as i use "selector: specific('lastSuccessfulBuild') in the copy artifact" in the list pipeline >> causing "infinite loop"
+		   build job: "list"
+                }
+                failure {
+                    echo "Build failed. Please check the logs."
+                }
+            }
+        }
+    }
+}
+
+#give permission to the "list" pipeline to copy the artifact
+
+
+
+#list pipeline
+
+pipeline {
+    agent any
+
+    stages {
+        stage('Copy Artifacts') {
+            steps {
+		//Copy Artifact Plugin must be installed
+                copyArtifacts(
+                    projectName: 'test', // Name of the source pipeline
+                    filter: 'target/*.jar', // Pattern to match the artifacts
+                    //target: 'target/', // Directory where artifacts will be copied >> this will make a dir "target" and copy the "/target/*.jar" inside it so it will be /target/target/*.jar >> causing error
+                    selector: specific('lastSuccessfulBuild') // Copy from the last successful build
+                )
+            }
+        }
+
+        stage('List Artifacts') {
+            steps {
+                sh 'ls -l target/*.jar' // List copied artifacts
+            }
+        }
+    }
+}
+
+
+#In Jenkins, artifacts are typically stored in the $JENKINS_HOME directory, which by default is located at /var/jenkins_home
